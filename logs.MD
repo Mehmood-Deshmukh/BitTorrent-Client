@@ -423,9 +423,104 @@ Until the client receives an `unchoke` message from the peer, it will remain in 
 So our overall sequence of operations with a peer will look like this:
 
 ```
-
 client -> peer: Handshake  | we are initializing the connection
 client <- peer: Handshake  | peer responds with its info_hash and peer_id
 client <- peer: Bitfield   | peer might send a bitfield message indicating which pieces it has
 client -> peer: Interested | letting the peer know that we are interested in downloading pieces
 client <- peer: Unchoke    | peer responds with an unchoke message, allowing us to request pieces
+```
+### 2 - Requesting Pieces
+
+As soon as the client receives an `unchoke` message from the peer, it can start requesting pieces of the file. If we know that the peer has a piece that we need, we can send a `request` message to the peer. If the peer complies, it will send us a `piece` message containing the requested piece of the file.
+
+The client will only ever have one outstanding request at a time, meaning it will only request one piece from the peer at a time. This is to avoid overwhelming the peer with requests and to ensure that we can handle the responses properly.
+
+Since connections to multiple peers will be established concurrently, there will be multiple outstanding requests at a time, but each peer will only have one outstanding request at a time.
+
+if for some reason the client does not want a piece that it has requested, it can send a `cancel` message to the peer, which will cancel previously sent request for that piece.
+
+**Some other messages that are exchanged between the client and the peer:**
+
+1. `have`: This message is sent by the peer to indicate that it has a new piece of the file. 
+The payload of this message contains the index of the piece that the peer has. The client can use this information to update the information about which pieces the peer has.
+
+2. `keep-alive`: This message can be sent in either directions to keep the connection alive.
+It is an empty message and is used to prevent the connection from being closed due to inactivity.   
+
+We will implement this after we go through the `piece manager` .
+
+**July 8 2025 - 06:17 PM** 
+
+### 3 - The Piece Manager
+
+So far we have only discussed `pieces` - the piece of data being exchanged by two peers.
+But I hate to break it to you, pieces are not the whole truth, there is one more concept - `blocks`.
+
+A `piece` , as its name suggests, is a piece of the file being downloaded. Your game or song or anything that you are downloading is divided into N pieces of equal size (obviously, except the last piece which may be smaller). The piece length is specified in the `.torrent` file, and it is typically of size 512KB or less and always a power of 2.
+
+Pieces, however, are still too big to be shared efficiently over the network, so they are further divided into smaller chunks called `blocks`. Block is the chunk of data that is actually requested between the peers, and the peer sends the blocks belonging to a piece when requested.
+
+but pieces are still used to indicate which peer has which pieces .
+
+If we had used only `blocks` then it would increase the overhead of the protocol, `bitfields` would have been longer and `.torrent` files would have been larger.
+
+Let's take an example to understand this better:
+
+Suppose we have a file of 700MB and we divide it into pieces of size 512KB. This means we will have
+around 1400 pieces of size 512KB each. 
+Each piece is still big, so we divide each piece into blocks of size 16KB. This means each piece will have 32 blocks (512KB / 16KB = 32).
+
+```
+Full file (700MB)
+├── Piece 1 (512KB)
+│   ├── Block 1 (16KB)
+│   ├── Block 2 (16KB) 
+│   ├── .......
+│   ├── Block 32 (16KB)
+
+```
+
+When client requests a peer for piece number say `5`, the peer will send the blocks of that piece one by one. The client will then reassemble the blocks to form the complete piece.
+
+A block is `2^14` bytes in size, again except the last block which may be smaller.
+
+### Why the official specification is confusing?
+
+- The official specification of the bittorrent protocol refers both `pieces` and `blocks` as pieces, which is confusing.
+
+- It also specifies a different size than what i've mentioned here, but i could find this size in most of the implementations, so i decided to go with it.
+
+**July 8 2025 - 09: 44 PM**
+
+### What does the Piece Manager do?
+
+When you use a torrent client, the Piece Manager is responsible for 
+1. Determine which block to request next
+2. Persisting received blocks to file
+3. Determining when a download is complete
+
+When a PeerConnection succesfully handshakes with a peer and recieves a `bitfield` message from the peer, it informs the Piece Manager about which peer has which pieces. This information is also updated on recieving a `have` message from the peer.
+
+Using this information, the Piece Manager knows the collective state of which pieces are available from which peers.
+
+When the first connection goes into the unchocked state, the Piece Manager will start requesting blocks from the peer. The block to be requested will be determined by calling a function say 
+`next_block_to_request()`, which will return the next block to be requested from the peer.
+
+We currently are going to implement this strategy to decide which block to request next:
+
+1. When the Piece Manager is constructed, all pieces and blocks are also constructed based on the piece length in the `.torrent` file.
+2. All pieces will be put into a `missing` list
+3. When `next_block_to_request()` is called, the manager will do one of the following:
+   - re-request any previously requested blocks that have timed out
+   - request the next block of the ongoing piece if there is one
+   - request the first block of the next missing piece if there is one
+
+
+Currently, we will be implementing this simple strategy, however a more efficient strategy would be to request the rarest pieces first, which would make the entire swarm healthier as well
+
+we will talk about the `rarest first` strategy later if we implement it.
+
+
+Whenever a block is received from the peer, the Piece Manager will store it in memory and update the state of the piece accordingly. If all blocks of a piece are received, the SHA1 hash of the piece will be calculated and compared with the expected hash from the `.torrent` file. If they match, the piece is considered complete and removed from the `missing` list and written to disk.
+
+When all the pieces are complete, (including matching hashes) the Piece Manager will notify the client that the download is complete.
