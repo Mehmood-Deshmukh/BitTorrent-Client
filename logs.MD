@@ -14,12 +14,13 @@ until recently I read about it and was left in awe.
 I learned that "BitTorrent" is a file sharing protocol and it follows a peer-to-peer (P2P) model. This means that instead of downloading files from a central server, users download pieces of files from each other. This makes the process faster and more efficient, especially for large files.
 
 Let's take a example: Suppose you have server with iso file of 10GB and you have 1000 users downloading it. If each user downloads the file from the server, it will take a lot of bandwidth
-(i.e 10GB * 1000 = 10TB of bandwidth). But if you use BitTorrent, each user can download pieces of the file from other users who already have it. This means that the bandwidth usage is much lower.
+(i.e 10GB \* 1000 = 10TB of bandwidth). But if you use BitTorrent, each user can download pieces of the file from other users who already have it. This means that the bandwidth usage is much lower.
 
 The other factor is speed and efficiency. When you download a file using BitTorrent, you can download pieces of the file from multiple users at the same time. This means that you can download the file much faster than if you were downloading it from a single server.
 
 ### Okay? then what is "Torrent"?
-So, in bittorent lingo a collection of peers participation in distribution of a file is called a "Torrent". 
+
+So, in bittorent lingo a collection of peers participation in distribution of a file is called a "Torrent".
 
 Not to be confused with the file format ".torrent" which is a metadata file that contains information about the files being shared, the tracker, and other details needed to download the files.
 
@@ -51,7 +52,7 @@ Once you have downloaded all the pieces of the file, you can reassemble them int
 
 ### So let's get started!
 
-We will be using 
+We will be using
 
 ### Parsing the ".torrent" file
 
@@ -88,17 +89,19 @@ class Encoder:
 
     def encode(self):
         return bencodepy.encode(self.data)
-    
+
 ```
 
 This code reads the ".torrent" file, decodes it using the `bencode` library, and returns the parsed data as a Python dictionary. The dictionary will contain information about the files, tracker, and other metadata.
 
 ### What's inside a ".torrent" file?
+
 A typical ".torrent" file contains the following information:
+
 - `info`: A dictionary containing information about the files being shared, including their names, sizes, and piece length.
 - `announce`: The URL of the tracker that helps peers find each other.
 - `creation date`: The date and time when the torrent was created.
-- `comment`: An optional comment about the torrent. 
+- `comment`: An optional comment about the torrent.
 - `pieces`: A string containing the SHA-1 hashes of the pieces of the file. Each piece is a fixed size, and the hashes are used to verify the integrity of the pieces.
 
 ### Let's test this now!
@@ -107,7 +110,7 @@ A typical ".torrent" file contains the following information:
 from bencoding import Decoder
 
 def test_bencoding():
-    torrent_file_path = "files/ubuntu-25.04-desktop-amd64.iso.torrent"  
+    torrent_file_path = "files/ubuntu-25.04-desktop-amd64.iso.torrent"
     with open(torrent_file_path, 'rb') as file:
         data = file.read()
     decoder = Decoder(data)
@@ -143,12 +146,13 @@ Pieces Length: 262144
 This confirms that our `Decoder` class is working correctly and can parse the ".torrent" file to extract the necessary metadata.
 
 ### Next Steps
+
 In the next steps, we will implement the functionality to connect to the tracker, retrieve the list of peers
 
 ### Contacting the Tracker
 
 Now that we can decode the ".torrent" file and extract the necessary metadata, the next step is to get the list of peers from the tracker.
-This is where the tracker comes into play. The tracker is a central server keeping track of available peers for a given torrent. 
+This is where the tracker comes into play. The tracker is a central server keeping track of available peers for a given torrent.
 
 It does **Not** contain any of the torrent data, only which peers can be connected to and their statistics.
 
@@ -167,29 +171,31 @@ The parameters we need to include in the request are:
 6. `port`: The TCP port this client listens on
 7. `compact`: Whether or not the client accepts a compacted list of peers (we will set this to 1 for compact mode).
 
-
 okay! you must have understood almost all the parameters, but what is `compact`?
 The `compact` parameter is used to specify whether the tracker should return a compact list of peers. In compact mode, the tracker returns a binary representation of the peer list, which is more efficient for transmission. This is useful when there are a large number of peers, as it reduces the size of the response.
 
-````
+```
 non compact mode:
 peers = [
     {"ip": "xxx.xxx.xxx.xxx", "port": 6881},
     {"ip": "yyy.yyy.yyy.yyy", "port": 6882},
     {"ip": "zzz.zzz.zzz.zzz", "port": 6883},
-]   
+]
 
 compact mode:
 peers = b'\x01\x02\x03\x04\x1a\x1b\x1c\x1d\x1e\x1f'  # binary representation of peers
-````
+```
+
 ### peer_id
-The `peer_id` is a unique identifier for this client. It is typically a 20-byte string that is generated randomly. 
+
+The `peer_id` is a unique identifier for this client. It is typically a 20-byte string that is generated randomly.
 
 We will follow the following format for the `peer_id` (reference: Markus Eliasson's implementation):
 
 ```
 -<2 character id>-<4 digit version>-<12 character random string>
 ```
+
 For example, if our client ID is `PC`, the version is `0001`, and the random string is `abcdefghijk`, the `peer_id` would be:
 
 ```
@@ -198,10 +204,11 @@ For example, if our client ID is `PC`, the version is `0001`, and the random str
 
 ### Implementing the Tracker Request
 
-We will create a class called `Tracker` that will handle the communication with the tracker. 
+We will create a class called `Tracker` that will handle the communication with the tracker.
 it will also include the `generate_peer_id` method to create a unique `peer_id` for this client.
 
 We will do the following steps in the `Tracker` class:
+
 1. Initialize the class with the torrent data.
 2. Decode the torrent data to extract the necessary metadata.
 3. Generate the `info_hash` from the `info` dictionary.
@@ -210,6 +217,7 @@ We will do the following steps in the `Tracker` class:
 6. request the tracker using `aiohttp` to get the response.
 
 The response contains:
+
 1. a list of peers in compact format. ( these may not be the complete list of peers, but a subset of them, another query will result in a different set of peers)
 
 2. the interval in seconds after which the client should contact the tracker again.
@@ -217,7 +225,6 @@ The response contains:
 3. complete: The number of peers that have complete file.
 
 4. incomplete: The number of leechers (peers that are still downloading the file).
-
 
 ```python
 import asyncio
@@ -236,7 +243,7 @@ class Tracker:
         self.tracker_url = self.decoded_data.get(b'announce', b'').decode('utf-8')
         self.info_hash = self.get_info_hash()
         self.peer_id = self.generate_peer_id()
-        self.port = 6881  
+        self.port = 6881
 
     def get_info_hash(self) -> bytes:
         info = self.decoded_data.get(b'info', {})
@@ -244,8 +251,8 @@ class Tracker:
         return hashlib.sha1(info_bencoded).digest()
 
     def generate_peer_id(self) -> str:
-        client_id = "PC"  
-        version = "0001"  
+        client_id = "PC"
+        version = "0001"
         random_string = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=12))
         return f"-{client_id}{version}-{random_string}".encode('utf-8')
 
@@ -256,13 +263,13 @@ class Tracker:
             'port': self.port,
             'uploaded': uploaded,
             'downloaded': 0,
-            'left': self.decoded_data.get(b'info', {}).get(b'length', 0),   
+            'left': self.decoded_data.get(b'info', {}).get(b'length', 0),
             'compact': 1
         }
 
         if first is not None:
             params['event'] = 'started'
-        
+
         async with aiohttp.ClientSession() as session:
             async with session.get(self.tracker_url + '?' + urlencode(params)) as response:
                 if response.status == 200:
@@ -287,26 +294,26 @@ class TrackerResponse:
             ip = socket.inet_ntoa(peers_compact[i:i+4])
             port = int.from_bytes(peers_compact[i+4:i+6], byteorder='big')
             peers_list.append({'ip': ip, 'port': port})
-        
+
         return peers_list
 
     @property
     def interval(self) -> int:
         return self.response.get(b'interval', 0)
-    
+
     @property
     def complete(self) -> int:
         return self.response.get(b'complete', 0)
-    
+
     @property
     def incomplete(self) -> int:
         return self.response.get(b'incomplete', 0)
-    
+
 ```
 
 We can test this class by creating `test_tracker.py`:
 
-```python   
+```python
 import asyncio
 from tracker import Tracker
 async def test_tracker():
@@ -318,7 +325,7 @@ async def test_tracker():
     tracker_response = await tracker.contact_tracker(first=True, uploaded=0, downloaded=0)
     peers = tracker_response.get_peers()
     interval = tracker_response.get_interval()
-    
+
 
 
     print(f"Tracker URL: {tracker.tracker_url}")
@@ -331,9 +338,94 @@ if __name__ == "__main__":
     asyncio.run(test_tracker())
 ```
 
-**July 6 2025 - 12:02 AM**
-
 When we run this code, it will contact the tracker and print the list of peers, the interval, and other information.
 
+We will add the peers to a `queue` of available peers, which our client can use to connect and download pieces of the file.
 
+**Why async?**
+Using `asyncio` and `aiohttp` allows us to perform non-blocking I/O operations, which is essential for a bittorrent client that needs to handle multiple connections and requests simultaneously. This way, we can efficiently manage the network operations without blocking the main thread, allowing for better performance and responsiveness.
 
+**So How will our Client work?**
+Once we have the list of peers, our client will:
+- keep track of the available peers in a queue.
+- connect to each peer using their IP address and port concurrently.
+- keep asking the tracker for more peers at regular intervals.
+
+We can implement this like this:
+
+- Run an infinte loop
+    - if the file is completely downloaded or user aborts the download, break the loop.
+    - otherwise:
+        - Make the tracker request to get the list of peers (at proper intervals).
+        - Add the peers to a queue.
+
+While this is happening, we will also be connecting to the peers in the queue and performing the bittorrent handshake with them.
+
+The pseudo code can look like this:
+```
+while True:
+    if file_downloaded or user_aborted:
+        break
+    
+    if this is the first request or if enough time has passed since the last request:
+        tracker_response = connect_to_tracker()
+        peers = tracker_response.get_peers()
+        add_peers_to_queue(peers)
+    else:
+        await asyncio.sleep(5) # wait for a while before making the next request
+
+```
+
+**July 8 2025 - 03:08 PM**
+
+Now we will implement a very important part of the bittorent client, which is establishing connections with the peers and downloading the pieces of the file.
+
+Before that, we need to understand the bittorent peer protocol and how it works.
+
+### Bittorent Peer Protocol
+
+### 1 - The handshake
+
+The first step in establishing a connection with a peer is to perform a handshake. This is the message that we will be sending to the peers. The handshake is a way to identify ourselves to the peer and to verify that the peer is a valid bittorent peer.
+
+Immediately after connecting to a peer, we will send a handshake message. The handshake message consists of the following fields:
+
+- `peer_id`: A unique identifier for this client, which we generated earlier.
+- `info_hash`: The SHA1 hash of the `info` dictionary from the `.torrent` file, which we also generated earlier.
+
+if our `info_hash` does not match the `info_hash` of the torrent that the peer is sharing, the peer will reject the handshake and close the connection.
+
+The peer may also send us a `bitfield` message, which is a bitmask that indicates which pieces of the file the peer has. This is useful for determining which pieces we can download from the peer.
+
+**What is a bitfield?**
+The `bitfield` message payload contains a sequence of bytes which when represented as bits, indicates which pieces of the file the peer has. Each bit corresponds to a piece of the file, and if the bit is set to 1, it means that the peer has that piece. If the bit is set to 0, it means that the peer does not have that piece.
+
+i.e, each byte represents 8 pieces of the file, and the length of the bitfield is equal to the number of pieces divided by 8 (rounded up).
+
+**The states of the Client:**
+During the entire process of connecting to a peer and downloading pieces, the client will go through several states, for each peer we connect to.
+
+Initially, we will be in the _choked_ and _not interested_ state, which means we are not allowed to request pieces from the peer nor we are interested in downloading pieces from them.
+
+The following states are important to understand:
+
+- _Choked_ : A choked peer is not allowed to request any pieces from the other peer.
+- _Unchoked_ : A unchoked peer is allowed to request pieces from the other peer.
+- _Interested_ : Indicates that a peer is interested in requesting pieces.
+- _Not interested_ : Indicates that the peer is not interested in requesting pieces.
+
+Consider _choked_ and _unchoked_ as rules or permissions and _interested_ and _not interested_ as the client's desire to download pieces from the peer.
+
+After the handshake, we will send an `interested` message to the peer, indicating that we are interested in getting `unchoked` in order to start requesting pieces from them.
+
+Until the client receives an `unchoke` message from the peer, it will remain in the _choked_ state and will not be able to download any pieces.
+
+So our overall sequence of operations with a peer will look like this:
+
+```
+
+client -> peer: Handshake  | we are initializing the connection
+client <- peer: Handshake  | peer responds with its info_hash and peer_id
+client <- peer: Bitfield   | peer might send a bitfield message indicating which pieces it has
+client -> peer: Interested | letting the peer know that we are interested in downloading pieces
+client <- peer: Unchoke    | peer responds with an unchoke message, allowing us to request pieces
