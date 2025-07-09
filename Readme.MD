@@ -1114,6 +1114,258 @@ Now the `_parse_message` method, which will parse the message from the buffer an
             print("Not enough data to parse a message")
     return None
 ```
-            
-            
+**July 9 2025: 02:44**
+
+Now we will implement the PieceManager class, which will handle the pieces and blocks of the file being downloaded. It will keep track of which pieces are missing, which pieces are complete, and which blocks are being requested.
+
+First the basic building block of the PieceManager, which is the `Block` class. A block will be in either of the following states:
+- `requested`: The block has been requested from the peer but not yet received.
+- `received`: The block has been received from the peer and is ready to be written to disk.
+- `missing`: The block is missing and needs to be requested from the peer.
+
+
+```python
+class Block:
+    Missing = 0
+    Pending = 1
+    Received = 2
+
+    def __init__(self, piece_index: int, block_offset: int, block_length: int):
+        self.piece_index = piece_index
+        self.block_offset = block_offset
+        self.block_length = block_length
+        self.state = Block.Missing
+        self.data = None
+```
+
+Now the `Piece` class, which will represent a piece of the file being downloaded. A piece will have a list of blocks, an index and a SHA1 hash. 
+
+```python
+class Piece:
+    def _init(self, index : int, blocks : List[Block], expected_hash: bytes):
+        self.index = index
+        self.blocks = blocks
+        self.expected_hash = expected_hash
+
+    def reset(self):
+        for block in self.blocks:
+            block.state = Block.Missing
+            block.data = None
     
+    def next_request(self) -> Block:
+        missing_blocks = [block for block in self.blocks if block.state == Block.Missing]
+
+        if missing_blocks:
+            missing_blocks[0].state = Block.Pending
+            return missing_blocks[0]
+        
+        return None
+    
+    def block_received(self, offset: int, data: bytes):
+        for block in self.blocks:
+            if block.block_offset == offset:
+                block.state = Block.Received
+                block.data = data
+                return block
+        
+        print(f"Block with offset {offset} not found in piece {self.index}")
+
+    
+    def is_complete(self) -> bool:
+        remaining_blocks = [block for block in self.blocks if block.state != Block.Received]
+
+        return len(remaining_blocks) == 0
+
+    def is_hash_matching(self):
+        piece_hash = sha1(self.data).digest()
+        return piece_hash == self.expected_hash
+
+    @property
+    def data(self) -> bytes:
+        
+        received_blocks = sorted(
+            [block for block in self.blocks if block.state == Block.Received],
+            key=lambda x: x.block_offset
+        )
+
+        if not received_blocks:
+            return None
+        
+        return b''.join(block.data for block in received_blocks)
+    
+```
+
+And now finally the `PieceManager` class
+
+```python
+class PieceManager:
+    def __init__(self, torrent):
+        self.torrent = torrent
+        self.peers = {}
+        self.pending_blocks = []
+        self.missing_pieces = []
+        self.ongoing_pieces = []
+        self.have_pieces = []
+        self.max_pending_time = 300 * 1000 
+        self.missing_pieces = self._initialize_pieces()
+        self.total_pieces = len(torrent.pieces)
+        self.fd = os.open(torrent.output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    
+    def _initialize_pieces(self) -> List[Piece]:
+        torrent = self.torrent
+        pieces = []
+        total_pieces = len(torrent.pieces)
+        std_piece_blocks = math.ceil(torrent.piece_length / REQUEST_SIZE)
+
+
+        for index, hash_value in enumerate(torrent.pieces):
+            if index < total_pieces - 1:
+                blocks = [
+                    Block(index, i * REQUEST_SIZE, REQUEST_SIZE) for i in range(std_piece_blocks)
+                ]
+            else:
+                last_piece_length = torrent.file_length % torrent.piece_length
+                if last_piece_length == 0:
+                    last_piece_length = torrent.piece_length
+                
+                num_blocks = math.ceil(last_piece_length / REQUEST_SIZE)
+                blocks = [
+                    Block(index, i * REQUEST_SIZE, REQUEST_SIZE) for i in range(num_blocks)
+                ]
+
+                if last_piece_length % REQUEST_SIZE > 0:
+                    blocks[-1].block_length = last_piece_length % REQUEST_SIZE
+
+            piece = Piece(index, blocks, hash_value)
+            pieces.append(piece)
+        
+        return pieces
+    
+    def close(self):
+        if self.fd:
+            os.close(self.fd)
+            self.fd = None
+        
+
+    @property
+    def complete(self):
+        return len(self.have_pieces) == self.total_pieces
+
+    @property
+    def bytes_downloaded(self):
+        return len(self.have_pieces) * self.torrent.piece_length
+
+    @property
+    def bytes_uploaded(self):
+        return 0; #right now we don't support seeding
+
+    def add_peer(self, peer_id, bitfield):
+        self.peers[peer_id] = bitfield
+    
+    def update_peer(self, peer_id, piece_index):
+        if peer_id in self.peers:
+            self.peers[peer_id].set(piece_index)
+        else:
+            print(f"Peer {peer_id} not found in peers list")
+    
+    def remove_peer(self, peer_id):
+        if peer_id in self.peers:
+            del self.peers[peer_id]
+        else:
+            print(f"Peer {peer_id} not found in peers list")
+```
+
+Now we will implement the `next_request` method 
+
+```python
+    PendingRequest = namedtuple('PendingRequest', ['block', 'requested_at'])
+
+    def next_request(self, peer_id)-> Block:
+        if peer_id not in self.peers:
+            print(f"Peer {peer_id} not found in peers list")
+            return None
+        
+        block = self._expired_requests(peer_id)
+        if not block:
+            block = self._next_ongoing_request(peer_id)
+            if not block:
+                block = self._get_rarest_piece(peer_id).next_request()
+        return block
+
+    def _expired_requests(self, peer_id) ->Block:
+        current_time = int(round(time.time() * 1000))
+        for request in self.pending_blocks:
+            if self.peers[peer_id][request.block.piece_index] and request.state == Block.Pending:
+                if current_time - request.requested_at > self.max_pending_time:
+                    print(f"Rerequesting block {request.block.block_offset} of piece {request.block.piece_index} from peer {peer_id} due to timeout")
+                    request.requested_at = current_time
+                    return request.block
+        return None 
+
+    def _next_ongoing_request(self, peer_id) -> Block:
+        for piece in self.ongoing_pieces:
+            if self.peers[peer_id][piece.index]:
+                block = piece.next_request()
+                if block:
+                   self.pending_blocks.append(
+                        self.PendingRequest(block, int(round(time.time() * 1000)))
+                    )
+                    return block
+        return None
+    
+    def _get_rarest_piece(self, peer_id):
+        piece_counts = defaultdict(int)
+        for piece in self.missing_pieces:
+            if not self.peers[peer_id][piece.index]:
+                continue
+            for p in self.peers:
+                if self.peers[p][piece.index]:
+                    piece_counts[piece] += 1
+
+        rarest_piece = min(piece_counts, key=lambda x: piece_counts[x])
+        self.missing_pieces.remove(rarest_piece)
+        self.ongoing_pieces.append(rarest_piece)
+        return rarest_piece
+```
+
+Now we will implement the `block_recieved` method, which will be called when a block is received from the peer.
+
+once a full piece is received, a SHA1 hash control is made. If the hash fails all the blocks of the piece are reset to `missing` state and the piece is removed from the ongoing pieces list. If the hash matches, the piece is written to disk and is indicated as Have
+
+
+```python
+    def block_received(self, peer_id, piece_index, block_offset, data):
+        print(f"Block {block_offset} of piece {piece_index} received from peer {peer_id}")
+
+        for index, request in enumerate(self.pending_blocks):
+            if request.block.piece_index == piece_index and request.block.block_offset == block_offset:
+                del self.pending_blocks[index]
+                break
+        
+        pieces = [self for self in self.ongoing_pieces if self.index == piece_index]
+        piece = pieces[0] if pieces else None
+        if piece:
+            piece.block_received(block_offset, data)
+            if piece.is_complete():
+                if piece.is_hash_matching():
+                    print(f"Piece {piece_index} completed and hash matched")
+                    self._write(piece)
+                    self.ongoing_pieces.remove(piece)
+                    self.have_pieces.append(piece)
+                    complete = (self.total_pieces - len(self.missing_pieces) - len(self.ongoing_pieces))
+                    print(f"Download complete: {complete}/{self.total_pieces} pieces")
+                else:
+                    print(f"Piece {piece_index} completed but hash did not match, resetting piece")
+                    piece.reset()
+        else:
+            print(f"Piece {piece_index} not found in ongoing pieces")
+
+    def _write(self, piece):
+        position = piece.index * self.torrent.piece_length
+        os.lseek(self.fd, position, os.SEEK_SET)
+        os.write(self.fd, piece.data)
+        print(f"Piece {piece.index} written to disk at position {position}")
+```
+
+
+Thats it , we have implemented the PieceManager!!!

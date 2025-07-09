@@ -5,6 +5,8 @@ import socket
 from asyncio import Queue
 from concurrent.futures import CancelledError
 
+REQUEST_SIZE = 2**14  
+
 class ProtocolError(BaseException):
     pass
 
@@ -368,7 +370,7 @@ class Have(PeerMessage):
         return 'Have'
 
 class Request(PeerMessage):
-    def __init__(self, piece_index: int, block_offset: int, block_length: int):
+    def __init__(self, piece_index: int, block_offset: int, block_length: int = REQUEST_SIZE):
         self.piece_index = piece_index
         self.block_offset = block_offset
         self.block_length = block_length
@@ -421,7 +423,7 @@ class Piece(PeerMessage):
         return 'Piece'
     
 class Cancel(PeerMessage):
-    def __init__(self, piece_index: int, block_offset: int, block_length: int):
+    def __init__(self, piece_index: int, block_offset: int, block_length: int = REQUEST_SIZE):
         self.piece_index = piece_index
         self.block_offset = block_offset
         self.block_length = block_length
