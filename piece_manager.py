@@ -18,6 +18,7 @@ class Block:
         self.block_length = block_length
         self.state = Block.Missing
         self.data = None
+        
 
 class Piece:
     def __init__(self, index : int, blocks : List[Block], expected_hash: bytes):
@@ -79,6 +80,7 @@ class PieceManager:
         self.max_pending_time = 300 * 1000 
         self.missing_pieces = self._initialize_pieces()
         self.total_pieces = len(torrent.pieces)
+        self.start_time = int(round(time.time() * 1000))
         
         self.endgame_threshold = max(1, int(0.1 * self.total_pieces))  
         self.endgame_active = False
@@ -140,6 +142,12 @@ class PieceManager:
     @property
     def bytes_uploaded(self):
         return 0  # right now we don't support seeding
+    
+    @property
+    def download_speed(self):
+        current_time = int(round(time.time() * 1000))
+        elapsed_time = (current_time - self.start_time) / 1000.0 
+        return (self.bytes_downloaded / elapsed_time) * 8 / (1024 * 1024)   
 
     def add_peer(self, peer_id, bitfield):
         self.peers[peer_id] = bitfield
@@ -318,7 +326,7 @@ class PieceManager:
                     self.have_pieces.append(piece)
                     complete = (self.total_pieces - len(self.missing_pieces) - len(self.ongoing_pieces))
                     logging.info(f"Download complete: {complete}/{self.total_pieces} {complete / self.total_pieces * 100:.2f}%")
-                    logging.info(f"Downloaded {self.bytes_downloaded / (1024 * 1024):.2f} MB")
+                    logging.info(f"Downloaded {self.bytes_downloaded / (1024 * 1024):.2f} MB at {self.download_speed:.2f} Mbps")
                     
 
                     if self.endgame_active and not self._should_enter_endgame():
