@@ -980,7 +980,7 @@ Now we will implement all the methods that are called in the `_start` method.
 
     
 
-    def _handshake(self) -> bytes:
+    async def _handshake(self) -> bytes:
         handshake = Handshake(self.info_hash, self.peer_id)
         self.writer.write(handshake.encode())
         await self.writer.drain()
@@ -988,7 +988,20 @@ Now we will implement all the methods that are called in the `_start` method.
         buf = b''
         tries = 1
 
-        while
+        while len(buf) < Handshake.length and tries <= 10:
+            tries += 1
+            buf = await self.reader.read(PeerStreamIterator.CHUNK_SIZE)
+
+        response = Handshake.decode(buf[:Handshake.length])
+        if not response:
+            raise ProtocolError("Invalid handshake response from peer")
+        if not response.info_hash == self.info_hash:
+            raise ProtocolError("Info hash mismatch in handshake response")
+
+        self.remote_id = response.peer_id
+        print(f"Handshake with peer {self.remote_id} successful")
+
+        return buf[Handshake.length:]
 
     async def _send_interested(self):
         interested = Interested()
