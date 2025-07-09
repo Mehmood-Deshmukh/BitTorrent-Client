@@ -34,7 +34,7 @@ class Torrent:
     
     @property
     def multi_file(self):
-        return 'files' in self.meta_info[b'info']
+        return b'files' in self.meta_info[b'info']  # Fixed: use b'files' instead of 'files'
 
     @property
     def piece_length(self):
@@ -53,7 +53,6 @@ class Torrent:
         pieces=[]
         offset = 0
         length = len(data)
-
 
         while offset < length:
             piece_hash = data[offset:offset + 20]

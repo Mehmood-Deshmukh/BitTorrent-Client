@@ -4,17 +4,19 @@ import asyncio
 from torrent import Torrent
 import logging
 
-def main():
+async def main():
     logging.basicConfig(level=logging.INFO)
     torrent_file = "./files/LibreOffice_25.2.4_Linux_x86-64_rpm.tar.gz.torrent"
     client = TorrentClient(Torrent(torrent_file))
-    loop = asyncio.get_event_loop()
-    task = loop.create_task(client.start())
-
+    
     try:
-        loop.run_until_complete(task)
+        await client.start()
     except CancelledError:
         logging.warning("Torrent download was cancelled.")
+    except Exception as e:
+        logging.error(f"Error during torrent download: {e}")
+    finally:
+        await client.stop()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -5,6 +5,7 @@ from tracker import Tracker
 from piece_manager import PieceManager
 from protocol import PeerConnection
 import logging
+
 MAX_PEER_CONNECTIONS = 40
 
 class TorrentClient:
@@ -54,7 +55,7 @@ class TorrentClient:
 
                     if response:
                         previous_time = current_time
-                        interval = response.interval
+                        intervals = response.interval  
                         self._empty_queue()
                         for peer in response.peers:
                             self.available_peers.put_nowait(peer)
@@ -75,8 +76,7 @@ class TorrentClient:
         self.piece_manager.close()
         await self.tracker.close()
 
-
     def _on_block_received(self, peer_id, piece_index, block_offset, data):
         self.piece_manager.block_received(
             peer_id, piece_index, block_offset, data
-        )   
+        )

@@ -15,7 +15,7 @@ class Tracker:
         self.peer_id = self.generate_peer_id()
         self.http_client = None
 
-    def generate_peer_id(self) -> str:
+    def generate_peer_id(self) -> bytes:
         client_id = "PC"  
         version = "0001"  
         random_string = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=12))
@@ -29,13 +29,12 @@ class Tracker:
         if self.http_client is None:
             raise Exception("HTTP client not initialized. Call start() first.")
 
-
         params = {
             'info_hash': self.torrent.info_hash,
             'peer_id': self.peer_id,
             'port': 6889,
             'uploaded': uploaded,
-            'downloaded': 0,
+            'downloaded': downloaded,  
             'left': self.torrent.total_size - downloaded, 
             'compact': 1
         }
@@ -59,8 +58,7 @@ class Tracker:
             self.http_client = None
 
 def _decode_port(port):
-        return unpack(">H", port)[0]
-
+    return unpack(">H", port)[0]
 
 class TrackerResponse:
     def __init__(self, response: dict):
@@ -73,7 +71,6 @@ class TrackerResponse:
             logging.warning('Tracker response contains peers in list format')
             raise NotImplementedError()
         else:
-
             peers = [peers[i:i+6] for i in range(0, len(peers), 6)]
             return [(socket.inet_ntoa(p[:4]), _decode_port(p[4:]))
                     for p in peers]
@@ -89,6 +86,3 @@ class TrackerResponse:
     @property
     def incomplete(self) -> int:
         return self.response.get(b'incomplete', 0)
-    
-    
-    

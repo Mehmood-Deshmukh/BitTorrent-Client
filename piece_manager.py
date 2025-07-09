@@ -1,4 +1,3 @@
-
 from hashlib import sha1
 from typing import List
 from collections import defaultdict, namedtuple
@@ -49,10 +48,8 @@ class Piece:
         
         logging.debug(f"Block with offset {offset} not found in piece {self.index}")
 
-    
     def is_complete(self) -> bool:
         remaining_blocks = [block for block in self.blocks if block.state != Block.Received]
-
         return len(remaining_blocks) == 0
 
     def is_hash_matching(self):
@@ -61,14 +58,13 @@ class Piece:
 
     @property
     def data(self) -> bytes:
-        
         received_blocks = sorted(
             [block for block in self.blocks if block.state == Block.Received],
             key=lambda x: x.block_offset
         )
 
         if not received_blocks:
-            return None
+            return b''
         
         return b''.join(block.data for block in received_blocks)
 
@@ -83,14 +79,18 @@ class PieceManager:
         self.max_pending_time = 300 * 1000 
         self.missing_pieces = self._initialize_pieces()
         self.total_pieces = len(torrent.pieces)
-        self.fd = os.open(torrent.output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        
+        try:
+            self.fd = os.open(torrent.output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        except OSError as e:
+            logging.error(f"Failed to open output file {torrent.output_file}: {e}")
+            self.fd = None
     
     def _initialize_pieces(self) -> List[Piece]:
         torrent = self.torrent
         pieces = []
         total_pieces = len(torrent.pieces)
         std_piece_blocks = math.ceil(torrent.piece_length / REQUEST_SIZE)
-
 
         for index, hash_value in enumerate(torrent.pieces):
             if index < total_pieces - 1:
@@ -116,10 +116,13 @@ class PieceManager:
         return pieces
     
     def close(self):
-        if self.fd:
-            os.close(self.fd)
-            self.fd = None
-        
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError as e:
+                logging.error(f"Error closing file: {e}")
+            finally:
+                self.fd = None
 
     @property
     def complete(self):
@@ -131,14 +134,14 @@ class PieceManager:
 
     @property
     def bytes_uploaded(self):
-        return 0; #right now we don't support seeding
+        return 0  # right now we don't support seeding
 
     def add_peer(self, peer_id, bitfield):
         self.peers[peer_id] = bitfield
     
     def update_peer(self, peer_id, piece_index):
         if peer_id in self.peers:
-            self.peers[peer_id].set(piece_index)
+            self.peers[peer_id][piece_index] = True 
         else:
             logging.warning(f"Peer {peer_id} not found in peers list")
     
@@ -150,7 +153,7 @@ class PieceManager:
 
     PendingRequest = namedtuple('PendingRequest', ['block', 'requested_at'])
 
-    def next_request(self, peer_id)-> Block:
+    def next_request(self, peer_id) -> Block:
         if peer_id not in self.peers:
             logging.warning(f"Peer {peer_id} not found in peers list")
             return None
@@ -159,10 +162,16 @@ class PieceManager:
         if not block:
             block = self._next_ongoing_request(peer_id)
             if not block:
-                block = self._get_rarest_piece(peer_id).next_request()
+                rarest_piece = self._get_rarest_piece(peer_id)
+                if rarest_piece:
+                    block = rarest_piece.next_request()
+                    if block:
+                        self.pending_blocks.append(
+                            self.PendingRequest(block, int(round(time.time() * 1000)))
+                        )
         return block
 
-    def _expired_requests(self, peer_id) ->Block:
+    def _expired_requests(self, peer_id) -> Block:
         current_time = int(round(time.time() * 1000))
         for request in self.pending_blocks:
             if self.peers[peer_id][request.block.piece_index]:
@@ -177,10 +186,10 @@ class PieceManager:
             if self.peers[peer_id][piece.index]:
                 block = piece.next_request()
                 if block:
-                   self.pending_blocks.append(
+                    self.pending_blocks.append(
                         self.PendingRequest(block, int(round(time.time() * 1000)))
                     )
-                return block
+                    return block
         return None
     
     def _get_rarest_piece(self, peer_id):
@@ -193,7 +202,6 @@ class PieceManager:
                     piece_counts[piece] += 1
         if not piece_counts:
             return None
-
 
         rarest_piece = min(piece_counts, key=lambda x: piece_counts[x])
         self.missing_pieces.remove(rarest_piece)
@@ -227,9 +235,14 @@ class PieceManager:
             logging.warning(f"Piece {piece_index} not found in ongoing pieces")
 
     def _write(self, piece):
-        position = piece.index * self.torrent.piece_length
-        os.lseek(self.fd, position, os.SEEK_SET)
-        os.write(self.fd, piece.data)
-        logging.debug(f"Piece {piece.index} written to disk at position {position}")
-
-
+        if self.fd is None:
+            logging.error("File descriptor is None, cannot write piece")
+            return
+            
+        try:
+            position = piece.index * self.torrent.piece_length
+            os.lseek(self.fd, position, os.SEEK_SET)
+            os.write(self.fd, piece.data)
+            logging.debug(f"Piece {piece.index} written to disk at position {position}")
+        except OSError as e:
+            logging.error(f"Error writing piece {piece.index} to disk: {e}")
