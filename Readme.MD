@@ -1009,3 +1009,111 @@ Now we will implement all the methods that are called in the `_start` method.
         self.writer.write(interested.encode())
         await self.writer.drain()
 ```
+
+The following is the implementation of the `PeerStreamIterator` class, which will handle the reading and writing of messages to the peer.
+
+It is an async iterator that continuosly reads from the peer's stream reader and tries to parse valid bittorent messages from the stream. It will yield messages as they are parsed.
+
+```python
+
+class PeerStreamIterator:
+    CHUNK_SIZE = 10 * 1024
+
+    def __init__(self, reader, initial: bytes=None):
+        self.reader = reader
+        self.buffer = initial if initial else b''
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        while True:
+            try:
+                data = await self.reader.read(PeerStreamIterator.CHUNK_SIZE)
+                if data:
+                    self.buffer += data
+                    message = self._parse_message()
+                    if message:
+                        return message
+                else:
+                    print("No data read from the stream")
+                    if self.buffer:
+                        message = self._parse_message()
+                        if message:
+                            return message
+                    raise StopAsyncIteration()
+            except ConnectionResetError:
+                print("Connection reset by peer")
+                raise StopAsyncIteration()
+            except CancelledError:
+                raise StopAsyncIteration()
+            except StopAsyncIteration as e:
+                raise e
+            except Exception as e:
+                print(f"Error while reading from stream: {e}")
+                raise StopAsyncIteration()
+```
+
+Now the `_parse_message` method, which will parse the message from the buffer and return a valid PeerMessage object.
+
+```python
+    def _parse_message(self):
+        header_length = 4
+
+        if len(self.buffer) < header_length:
+            return None
+
+        message_length = struct.unpack('!I', self.buffer[:header_length])[0]
+        if message_length == 0:
+            return KeepAlive()
+        
+        if len(self.buffer) > message_length:
+            message_id = self.buffer[header_length]
+            
+            def _consume():
+                self.buffer = self.buffer[header_length  + message_length:]
+            
+            def _data():
+                return self.buffer[:header_length + message_length]
+
+            if message_id == PeerMessage.BitField:
+                data = _data()
+                _consume()
+                return BitField.decode(data)
+            elif message_id == PeerMessage.Interested:
+                _consume()
+                return Interested()
+            elif message_id == PeerMessage.NotInterested:
+                _consume()
+                return NotInterested()
+            elif message_id == PeerMessage.Choke:
+                _consume()
+                return Choke()
+            elif message_id == PeerMessage.Unchoke:
+                _consume()
+                return Unchoke()
+            elif message_id == PeerMessage.Have:
+                data = _data()
+                _consume()
+                return Have.decode(data)
+            elif message_id == PeerMessage.Request:
+                data = _data()
+                _consume()
+                return Request.decode(data)
+            elif message_id == PeerMessage.Piece:
+                data = _data()
+                _consume()
+                return Piece.decode(data)
+            elif message_id == PeerMessage.Cancel:
+                data = _data()
+                _consume()
+                return Cancel.decode(data)
+            else:
+                raise ProtocolError(f"Unknown message id: {message_id}")
+        else:
+            print("Not enough data to parse a message")
+    return None
+```
+            
+            
+    
