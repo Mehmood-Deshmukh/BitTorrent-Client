@@ -7,6 +7,7 @@ from typing import Dict, List
 from bencoding import Decoder, Encoder
 import hashlib
 from struct import unpack
+import logging
 
 class Tracker:
     def __init__(self, torrent):
@@ -43,7 +44,7 @@ class Tracker:
             params['event'] = 'started'
 
         url = self.torrent.announce + '?' + urlencode(params)
-        print(f"Contacting tracker at: {url}")
+        logging.debug(f"Tracker URL: {url}")
         
         async with self.http_client.get(url) as response:
             if response.status == 200:
@@ -69,10 +70,10 @@ class TrackerResponse:
     def peers(self):
         peers = self.response[b'peers']
         if isinstance(peers, list):
-            print('Tracker response contains peers in list format')
+            logging.warning('Tracker response contains peers in list format')
             raise NotImplementedError()
         else:
-            print('Tracker response contains peers in binary format')
+
             peers = [peers[i:i+6] for i in range(0, len(peers), 6)]
             return [(socket.inet_ntoa(p[:4]), _decode_port(p[4:]))
                     for p in peers]

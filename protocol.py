@@ -4,6 +4,7 @@ import asyncio
 import socket
 from asyncio import Queue
 from concurrent.futures import CancelledError
+import logging
 
 REQUEST_SIZE = 2**14  
 
@@ -27,11 +28,11 @@ class PeerConnection:
     async def _start(self):
         while 'stopped' not in self.my_state:
             ip, port = await self.queue.get()
-            print(f"Got peer {ip}:{port} from queue")
+            logging.debug(f"Connecting to peer {ip}:{port}")
 
             try:
                 self.reader, self.writer = await asyncio.open_connection(ip, port)
-                print(f"Connecting to peer {ip}:{port}")
+                logging.debug(f"Connecting to peer {ip}:{port}")
 
                 buffer = await self._handshake()
 
@@ -92,7 +93,7 @@ class PeerConnection:
             self.cancel()
 
     def cancel(self):
-        print(f"Closing connection with peer {self.remote_id}")
+        logging.debug(f"Closing connection with peer {self.remote_id}")
         if not self.future.done():
             self.future.cancel()
         if self.writer:
@@ -108,7 +109,7 @@ class PeerConnection:
         block = self.piece_manager.next_request(self.remote_id)
         if block:
             request = Request(block.piece_index, block.block_offset, block.block_length)
-            print(f"Requesting block {block.block_offset} of piece {block.piece_index} from peer {self.remote_id}")
+            logging.debug(f"Requesting block {block.block_offset} of piece {block.piece_index} from peer {self.remote_id}")
             self.writer.write(request.encode())
             await self.writer.drain()
 
@@ -133,14 +134,14 @@ class PeerConnection:
             raise ProtocolError("Info hash mismatch in handshake response")
 
         self.remote_id = response.peer_id
-        print(f"Handshake with peer {self.remote_id} successful")
+        logging.info(f"Handshake with peer {self.remote_id} successful")
 
         return buf[Handshake.length:]
 
 
     async def _send_interested(self):
         interested = Interested()
-        print(f"Sending message {interested} to peer {self.remote_id}")
+        logging.debug(f"Sending message {interested} to peer {self.remote_id}")
         self.writer.write(interested.encode())
         await self.writer.drain()
 
@@ -164,7 +165,7 @@ class PeerStreamIterator:
                     if message:
                         return message
                 else:
-                    print("No data read from the stream")
+                    logging.debug("No data read from the stream")
                     if self.buffer:
                         message = self._parse_message()
                         if message:

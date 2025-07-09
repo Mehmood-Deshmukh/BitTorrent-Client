@@ -6,7 +6,7 @@ import os
 import math
 import time
 from protocol import REQUEST_SIZE
-
+import logging
 
 class Block:
     Missing = 0
@@ -47,7 +47,7 @@ class Piece:
                 block.data = data
                 return block
         
-        print(f"Block with offset {offset} not found in piece {self.index}")
+        logging.debug(f"Block with offset {offset} not found in piece {self.index}")
 
     
     def is_complete(self) -> bool:
@@ -140,19 +140,19 @@ class PieceManager:
         if peer_id in self.peers:
             self.peers[peer_id].set(piece_index)
         else:
-            print(f"Peer {peer_id} not found in peers list")
+            logging.warning(f"Peer {peer_id} not found in peers list")
     
     def remove_peer(self, peer_id):
         if peer_id in self.peers:
             del self.peers[peer_id]
         else:
-            print(f"Peer {peer_id} not found in peers list")
+            logging.warning(f"Peer {peer_id} not found in peers list")
 
     PendingRequest = namedtuple('PendingRequest', ['block', 'requested_at'])
 
     def next_request(self, peer_id)-> Block:
         if peer_id not in self.peers:
-            print(f"Peer {peer_id} not found in peers list")
+            logging.warning(f"Peer {peer_id} not found in peers list")
             return None
         
         block = self._expired_requests(peer_id)
@@ -167,7 +167,7 @@ class PieceManager:
         for request in self.pending_blocks:
             if self.peers[peer_id][request.block.piece_index]:
                 if current_time - request.requested_at > self.max_pending_time:
-                    print(f"Rerequesting block {request.block.block_offset} of piece {request.block.piece_index} from peer {peer_id} due to timeout")
+                    logging.debug(f"Rerequesting block {request.block.block_offset} of piece {request.block.piece_index} from peer {peer_id} due to timeout")
                     request.requested_at = current_time
                     return request.block
         return None 
@@ -201,7 +201,7 @@ class PieceManager:
         return rarest_piece
     
     def block_received(self, peer_id, piece_index, block_offset, data):
-        print(f"Block {block_offset} of piece {piece_index} received from peer {peer_id}")
+        logging.debug(f"Block {block_offset} of piece {piece_index} received from peer {peer_id}")
 
         for index, request in enumerate(self.pending_blocks):
             if request.block.piece_index == piece_index and request.block.block_offset == block_offset:
@@ -214,22 +214,22 @@ class PieceManager:
             piece.block_received(block_offset, data)
             if piece.is_complete():
                 if piece.is_hash_matching():
-                    print(f"Piece {piece_index} completed and hash matched")
+                    logging.debug(f"Piece {piece_index} completed and hash matched")
                     self._write(piece)
                     self.ongoing_pieces.remove(piece)
                     self.have_pieces.append(piece)
                     complete = (self.total_pieces - len(self.missing_pieces) - len(self.ongoing_pieces))
-                    print(f"Download complete: {complete}/{self.total_pieces} pieces")
+                    logging.info(f"Download complete: {complete}/{self.total_pieces} {complete / self.total_pieces * 100:.2f}%")
                 else:
-                    print(f"Piece {piece_index} completed but hash did not match, resetting piece")
+                    logging.warning(f"Piece {piece_index} completed but hash did not match, resetting piece")
                     piece.reset()
         else:
-            print(f"Piece {piece_index} not found in ongoing pieces")
+            logging.warning(f"Piece {piece_index} not found in ongoing pieces")
 
     def _write(self, piece):
         position = piece.index * self.torrent.piece_length
         os.lseek(self.fd, position, os.SEEK_SET)
         os.write(self.fd, piece.data)
-        print(f"Piece {piece.index} written to disk at position {position}")
+        logging.debug(f"Piece {piece.index} written to disk at position {position}")
 
 

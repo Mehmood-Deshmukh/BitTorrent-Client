@@ -4,6 +4,7 @@ import time
 from tracker import Tracker
 from piece_manager import PieceManager
 from protocol import PeerConnection
+import logging
 MAX_PEER_CONNECTIONS = 40
 
 class TorrentClient:
@@ -35,16 +36,16 @@ class TorrentClient:
 
         try:
             while True:
-                if self.piece_manager.complete:
-                    print("Torrent download complete!")
+                if self.piece_manager.complete: 
+                    logging.info("Torrent download complete!")  
                     break
                 if self.aborted:
-                    print("Torrent download aborted!")
+                    logging.info("Torrent download aborted.")
                     break
 
                 current_time = time.time()
                 if previous_time is None or current_time - previous_time >= intervals:
-                    print("Requesting more peers from tracker...")
+                    logging.debug("Requesting more peers from tracker...")
                     response = await self.tracker.contact_tracker(
                         first=previous_time is None,
                         uploaded=self.piece_manager.bytes_uploaded,
