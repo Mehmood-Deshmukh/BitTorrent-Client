@@ -89,7 +89,7 @@ class PeerConnection:
             except ProtocolError as e:
                 logging.error(f"Protocol error: {e}")
             except (ConnectionRefusedError, TimeoutError, asyncio.TimeoutError) as e:
-                logging.error(f"Unable to connect to peer {ip}:{port}, error: {e}")
+                logging.error(f"{ip}:{port} refused connection or timed out")
             except (ConnectionResetError, CancelledError) as e:
                 logging.error(f"Connection with peer {ip}:{port} closed, error: {e}")
             except Exception as e:

@@ -1373,3 +1373,119 @@ Thats it , we have implemented the PieceManager!!!
 **July 9 2025: 04:52 PM**
 
 i have printed a lot of stuff for debugging purposes, which is causing me issues so now i will be using the logging library to log messages 
+
+Now, i have a working implementation of a bittorrent client that can connect to peers and recive pieces of a file. 
+
+The only issue is that , towards the end of the download, the download gets stuck. This is because
+we get stuck to few slow or choked peers that are not sending us the last pieces of the file.
+
+this can be fixed by implementing something called as `Endgame Mode`, which is a strategy to speed up the download of the last few pieces of a file.
+
+First thing we will do is define a configuration for endgame mode. this includes
+- threshold: the number of pieces that need to be left to trigger endgame mode
+- max_requests: the maximum number of requests to send in endgame mode for a particular piece
+
+```python   
+    self.endgame_threshold = max(1, int(0.1 * self.total_pieces))  
+    self.max_endgame_requests_per_block = 5
+    self.endgame_active = False
+    self.endgame_requests = {}  
+```
+
+As you can see, the endgame threshold is set to 10% of the total pieces, and the maximum number of requests per block is set to 5.
+
+we will write a method to check if endgame mode should be activated
+
+```python
+    def _should_enter_endgame(self) -> bool:
+        remaining_pieces = len(self.missing_pieces) + len(self.ongoing_pieces)
+        return remaining_pieces <= self.endgame_threshold
+```
+
+this will be called in the `next_request` method to check if endgame mode should be activated.
+
+```python
+    if not self.endgame_active and self._should_enter_endgame():
+            self.endgame_active = True
+            logging.info("We are in the Endgame now - Doctor Strange")
+        
+        if self.endgame_active:
+            block = self._get_endgame_block(peer_id)
+            if block:
+                return block
+```
+
+getting the endgame blocks is very easy , all we gotta do is request the remaining blocks from all the peers that have the piece we are interested in. 
+
+```python
+    def _get_endgame_block(self, peer_id) -> Block:
+        if peer_id not in self.peers:
+            return None
+            
+        for piece in self.ongoing_pieces:
+            if not self.peers[peer_id][piece.index]:
+                continue
+                
+            for block in piece.blocks:
+                if block.state == Block.Missing:
+                    block.state = Block.Pending
+                    block_key = (block.piece_index, block.block_offset)
+                    if block_key not in self.endgame_requests:
+                        self.endgame_requests[block_key] = set()
+                    self.endgame_requests[block_key].add(peer_id)
+                    
+                    self.pending_blocks.append(
+                        self.PendingRequest(block, int(round(time.time() * 1000)))
+                    )
+                    return block
+                    
+                elif block.state == Block.Pending:
+                    block_key = (block.piece_index, block.block_offset)
+                    if block_key not in self.endgame_requests:
+                        self.endgame_requests[block_key] = set()
+                        
+                    if (len(self.endgame_requests[block_key]) < self.max_endgame_requests_per_block and 
+                        peer_id not in self.endgame_requests[block_key]):
+                        
+                        self.endgame_requests[block_key].add(peer_id)
+                        logging.debug(f"Endgame: requesting block {block.block_offset} of piece {block.piece_index} from additional peer {peer_id}")
+                        return block
+                        
+        for piece in self.missing_pieces[:]:  
+            if not self.peers[peer_id][piece.index]:
+                continue
+                
+            self.missing_pieces.remove(piece)
+            self.ongoing_pieces.append(piece)
+            
+            block = piece.next_request()
+            if block:
+                block_key = (block.piece_index, block.block_offset)
+                if block_key not in self.endgame_requests:
+                    self.endgame_requests[block_key] = set()
+                self.endgame_requests[block_key].add(peer_id)
+                
+                self.pending_blocks.append(
+                    self.PendingRequest(block, int(round(time.time() * 1000)))
+                )
+                return block
+                
+        return None
+```
+
+When a peer leaves, we now need to get rid of the endgame requests that were made to that peer. 
+
+```python
+ def _cleanup_endgame_requests_for_peer(self, peer_id):
+        blocks_to_remove = []
+        for block_key, peer_set in self.endgame_requests.items():
+            peer_set.discard(peer_id)
+            if not peer_set:  
+                blocks_to_remove.append(block_key)
+        
+        for block_key in blocks_to_remove:
+            del self.endgame_requests[block_key]
+```
+
+Once we recieve the block we need to get rid of redundant requests too, right now i wont do that we can do that later
+

@@ -1,5 +1,5 @@
 from hashlib import sha1
-from typing import List
+from typing import List, Set, Dict
 from collections import defaultdict, namedtuple
 import os
 import math
@@ -80,6 +80,11 @@ class PieceManager:
         self.missing_pieces = self._initialize_pieces()
         self.total_pieces = len(torrent.pieces)
         
+        self.endgame_threshold = max(1, int(0.1 * self.total_pieces))  
+        self.endgame_active = False
+        self.endgame_requests = {}  
+        self.max_endgame_requests_per_block = 5
+        
         try:
             self.fd = os.open(torrent.output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
         except OSError as e:
@@ -148,8 +153,78 @@ class PieceManager:
     def remove_peer(self, peer_id):
         if peer_id in self.peers:
             del self.peers[peer_id]
+            if self.endgame_active:
+                self._cleanup_endgame_requests_for_peer(peer_id)
         else:
             logging.warning(f"Peer {peer_id} not found in peers list")
+
+    def _cleanup_endgame_requests_for_peer(self, peer_id):
+        blocks_to_remove = []
+        for block_key, peer_set in self.endgame_requests.items():
+            peer_set.discard(peer_id)
+            if not peer_set:  
+                blocks_to_remove.append(block_key)
+        
+        for block_key in blocks_to_remove:
+            del self.endgame_requests[block_key]
+
+    def _should_enter_endgame(self) -> bool:
+        remaining_pieces = len(self.missing_pieces) + len(self.ongoing_pieces)
+        return remaining_pieces <= self.endgame_threshold
+
+    def _get_endgame_block(self, peer_id) -> Block:
+        if peer_id not in self.peers:
+            return None
+            
+        for piece in self.ongoing_pieces:
+            if not self.peers[peer_id][piece.index]:
+                continue
+                
+            for block in piece.blocks:
+                if block.state == Block.Missing:
+                    block.state = Block.Pending
+                    block_key = (block.piece_index, block.block_offset)
+                    if block_key not in self.endgame_requests:
+                        self.endgame_requests[block_key] = set()
+                    self.endgame_requests[block_key].add(peer_id)
+                    
+                    self.pending_blocks.append(
+                        self.PendingRequest(block, int(round(time.time() * 1000)))
+                    )
+                    return block
+                    
+                elif block.state == Block.Pending:
+                    block_key = (block.piece_index, block.block_offset)
+                    if block_key not in self.endgame_requests:
+                        self.endgame_requests[block_key] = set()
+                        
+                    if (len(self.endgame_requests[block_key]) < self.max_endgame_requests_per_block and 
+                        peer_id not in self.endgame_requests[block_key]):
+                        
+                        self.endgame_requests[block_key].add(peer_id)
+                        logging.debug(f"Endgame: requesting block {block.block_offset} of piece {block.piece_index} from additional peer {peer_id}")
+                        return block
+                        
+        for piece in self.missing_pieces[:]:  
+            if not self.peers[peer_id][piece.index]:
+                continue
+                
+            self.missing_pieces.remove(piece)
+            self.ongoing_pieces.append(piece)
+            
+            block = piece.next_request()
+            if block:
+                block_key = (block.piece_index, block.block_offset)
+                if block_key not in self.endgame_requests:
+                    self.endgame_requests[block_key] = set()
+                self.endgame_requests[block_key].add(peer_id)
+                
+                self.pending_blocks.append(
+                    self.PendingRequest(block, int(round(time.time() * 1000)))
+                )
+                return block
+                
+        return None
 
     PendingRequest = namedtuple('PendingRequest', ['block', 'requested_at'])
 
@@ -157,6 +232,15 @@ class PieceManager:
         if peer_id not in self.peers:
             logging.warning(f"Peer {peer_id} not found in peers list")
             return None
+        
+        if not self.endgame_active and self._should_enter_endgame():
+            self.endgame_active = True
+            logging.info("We are in the Endgame now - Doctor Strange")
+        
+        if self.endgame_active:
+            block = self._get_endgame_block(peer_id)
+            if block:
+                return block
         
         block = self._expired_requests(peer_id)
         if not block:
@@ -216,6 +300,12 @@ class PieceManager:
                 del self.pending_blocks[index]
                 break
         
+        if self.endgame_active:
+            block_key = (piece_index, block_offset)
+            if block_key in self.endgame_requests:
+                self._cancel_redundant_requests(piece_index, block_offset)
+                del self.endgame_requests[block_key]
+        
         pieces = [p for p in self.ongoing_pieces if p.index == piece_index]
         piece = pieces[0] if pieces else None
         if piece:
@@ -228,11 +318,26 @@ class PieceManager:
                     self.have_pieces.append(piece)
                     complete = (self.total_pieces - len(self.missing_pieces) - len(self.ongoing_pieces))
                     logging.info(f"Download complete: {complete}/{self.total_pieces} {complete / self.total_pieces * 100:.2f}%")
+                    logging.info(f"Downloaded {self.bytes_downloaded / (1024 * 1024):.2f} MB")
+                    
+
+                    if self.endgame_active and not self._should_enter_endgame():
+                        self.endgame_active = False
+                        self.endgame_requests.clear()
+                        logging.info("Exiting endgame mode")
+                        
                 else:
                     logging.warning(f"Piece {piece_index} completed but hash did not match, resetting piece")
                     piece.reset()
         else:
-            logging.warning(f"Piece {piece_index} not found in ongoing pieces")
+            logging.debug(f"Piece {piece_index} not found in ongoing pieces")
+
+    def _cancel_redundant_requests(self, piece_index, block_offset):
+        block_key = (piece_index, block_offset)
+        if block_key in self.endgame_requests:
+            peer_count = len(self.endgame_requests[block_key])
+            if peer_count > 1:
+                logging.debug(f"Cancelling {peer_count - 1} redundant requests for block {block_offset} of piece {piece_index}")
 
     def _write(self, piece):
         if self.fd is None:
