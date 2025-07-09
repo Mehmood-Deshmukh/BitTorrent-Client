@@ -45,7 +45,7 @@ class TorrentClient:
                 current_time = time.time()
                 if previous_time is None or current_time - previous_time >= intervals:
                     print("Requesting more peers from tracker...")
-                    response = await self.tracker.connect_tracker(
+                    response = await self.tracker.contact_tracker(
                         first=previous_time is None,
                         uploaded=self.piece_manager.bytes_uploaded,
                         downloaded=self.piece_manager.bytes_downloaded,
@@ -55,7 +55,7 @@ class TorrentClient:
                         previous_time = current_time
                         interval = response.interval
                         self._empty_queue()
-                        for peer in response.get_peers():
+                        for peer in response.peers:
                             self.available_peers.put_nowait(peer)
                 else:
                     await asyncio.sleep(5)
@@ -72,7 +72,7 @@ class TorrentClient:
         for peer in self.peers:
             await peer.stop()
         self.piece_manager.close()
-        await self.tracker.stop()
+        await self.tracker.close()
 
 
     def _on_block_received(self, peer_id, piece_index, block_offset, data):

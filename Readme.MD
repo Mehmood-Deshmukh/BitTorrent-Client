@@ -1369,3 +1369,7 @@ once a full piece is received, a SHA1 hash control is made. If the hash fails al
 
 
 Thats it , we have implemented the PieceManager!!!
+
+**July 9 2025: 04:52 PM**
+
+i have printed a lot of stuff for debugging purposes, which is causing me issues so now i will be using the logging library to log messages 

@@ -98,7 +98,7 @@ class PieceManager:
                     Block(index, i * REQUEST_SIZE, REQUEST_SIZE) for i in range(std_piece_blocks)
                 ]
             else:
-                last_piece_length = torrent.file_length % torrent.piece_length
+                last_piece_length = torrent.total_size % torrent.piece_length
                 if last_piece_length == 0:
                     last_piece_length = torrent.piece_length
                 
@@ -208,7 +208,7 @@ class PieceManager:
                 del self.pending_blocks[index]
                 break
         
-        pieces = [self for self in self.ongoing_pieces if self.index == piece_index]
+        pieces = [p for p in self.ongoing_pieces if p.index == piece_index]
         piece = pieces[0] if pieces else None
         if piece:
             piece.block_received(block_offset, data)

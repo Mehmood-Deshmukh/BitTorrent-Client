@@ -6,68 +6,76 @@ from urllib.parse import urlencode
 from typing import Dict, List
 from bencoding import Decoder, Encoder
 import hashlib
+from struct import unpack
 
 class Tracker:
-    def __init__(self, torrent_data: bytes):
-        self.torrent_data = torrent_data
-        self.decoded_data = Decoder(torrent_data).decode()
-        self.tracker_url = self.decoded_data.get(b'announce', b'').decode('utf-8')
-        self.info_hash = self.get_info_hash()
+    def __init__(self, torrent):
+        self.torrent = torrent
         self.peer_id = self.generate_peer_id()
-        self.port = 6881  
-
-    def get_info_hash(self) -> bytes:
-        info = self.decoded_data.get(b'info', {})
-        info_bencoded = Encoder(info).encode()
-        return hashlib.sha1(info_bencoded).digest()
+        self.http_client = None
 
     def generate_peer_id(self) -> str:
         client_id = "PC"  
         version = "0001"  
         random_string = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=12))
         return f"-{client_id}{version}-{random_string}".encode('utf-8')
+    
+    async def start(self):
+        if self.http_client is None:
+            self.http_client = aiohttp.ClientSession()
 
     async def contact_tracker(self, first: bool = None, uploaded: int = 0, downloaded: int = 0) -> List[Dict[str, str]]:
+        if self.http_client is None:
+            raise Exception("HTTP client not initialized. Call start() first.")
+
+
         params = {
-            'info_hash': self.info_hash,
-            'peer_id': self.peer_id.decode('utf-8'),
-            'port': self.port,
+            'info_hash': self.torrent.info_hash,
+            'peer_id': self.peer_id,
+            'port': 6889,
             'uploaded': uploaded,
             'downloaded': 0,
-            'left': self.decoded_data.get(b'info', {}).get(b'length', 0),   
+            'left': self.torrent.total_size - downloaded, 
             'compact': 1
         }
 
         if first is not None:
             params['event'] = 'started'
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(self.tracker_url + '?' + urlencode(params)) as response:
-                print(self.tracker_url + '?' + urlencode(params))
-                if response.status == 200:
-                    data = await response.read()
-                    return TrackerResponse(Decoder(data).decode())
-                else:
-                    raise Exception(f"Tracker request failed with status {response.status}")
 
+        url = self.torrent.announce + '?' + urlencode(params)
+        print(f"Contacting tracker at: {url}")
+        
+        async with self.http_client.get(url) as response:
+            if response.status == 200:
+                data = await response.read()
+                return TrackerResponse(Decoder(data).decode())
+            else:
+                raise Exception(f"Tracker request failed with status {response.status}")
+                
+    async def close(self):
+        if self.http_client is not None:
+            await self.http_client.close()
+            self.http_client = None
+
+def _decode_port(port):
+        return unpack(">H", port)[0]
 
 
 class TrackerResponse:
     def __init__(self, response: dict):
         self.response = response
 
-    def get_peers(self) -> List[Dict[str, str]]:
-        peers_compact = self.response.get(b'peers', b'')
-        if not peers_compact:
-            return []
-
-        peers_list = []
-        for i in range(0, len(peers_compact), 6):
-            ip = socket.inet_ntoa(peers_compact[i:i+4])
-            port = int.from_bytes(peers_compact[i+4:i+6], byteorder='big')
-            peers_list.append({'ip': ip, 'port': port})
-        
-        return peers_list
+    @property
+    def peers(self):
+        peers = self.response[b'peers']
+        if isinstance(peers, list):
+            print('Tracker response contains peers in list format')
+            raise NotImplementedError()
+        else:
+            print('Tracker response contains peers in binary format')
+            peers = [peers[i:i+6] for i in range(0, len(peers), 6)]
+            return [(socket.inet_ntoa(p[:4]), _decode_port(p[4:]))
+                    for p in peers]
 
     @property
     def interval(self) -> int:
@@ -80,4 +88,6 @@ class TrackerResponse:
     @property
     def incomplete(self) -> int:
         return self.response.get(b'incomplete', 0)
+    
+    
     

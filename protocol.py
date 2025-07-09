@@ -92,20 +92,20 @@ class PeerConnection:
             self.cancel()
 
     def cancel(self):
-        print("Closing connection with peer {self.remote_id}")
+        print(f"Closing connection with peer {self.remote_id}")
         if not self.future.done():
             self.future.cancel()
         if self.writer:
             self.writer.close()
         self.queue.task_done()
 
-    def stop(self):
+    async def stop(self):
         self.my_state.append('stopped')
         if not self.future.done():
             self.future.cancel()
     
     async def _request_next_block(self):
-        block = self.piece_manager.next_block_to_request()
+        block = self.piece_manager.next_request(self.remote_id)
         if block:
             request = Request(block.piece_index, block.block_offset, block.block_length)
             print(f"Requesting block {block.block_offset} of piece {block.piece_index} from peer {self.remote_id}")
@@ -143,6 +143,7 @@ class PeerConnection:
         print(f"Sending message {interested} to peer {self.remote_id}")
         self.writer.write(interested.encode())
         await self.writer.drain()
+
 class PeerStreamIterator:
     CHUNK_SIZE = 10 * 1024
 
@@ -233,13 +234,12 @@ class PeerStreamIterator:
                 return Cancel.decode(data)
             else:
                 raise ProtocolError(f"Unknown message id: {message_id}")
-        else:
-            print("Not enough data to parse a message")
+        
         return None
             
 
 class PeerMessage:
-    choke = 0
+    Choke = 0
     Unchoke = 1
     Interested = 2
     NotInterested = 3
@@ -261,6 +261,7 @@ class PeerMessage:
         pass
 
 class Handshake(PeerMessage):
+    length = 68
 
     def __init__(self, info_hash: bytes, peer_id: bytes):
         self.pstrlen = 19
