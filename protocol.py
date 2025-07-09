@@ -3,7 +3,6 @@ import bitstring
 import asyncio
 import socket
 from asyncio import Queue
-from typing import Optional, Dict, Any
 from concurrent.futures import CancelledError
 
 class ProtocolError(BaseException):
@@ -32,7 +31,7 @@ class PeerConnection:
                 self.reader, self.writer = await asyncio.open_connection(ip, port)
                 print(f"Connecting to peer {ip}:{port}")
 
-                buffer = self._handshake()
+                buffer = await self._handshake()
 
                 self.my_state.append('choked')
                 await self._send_interested()
@@ -42,7 +41,7 @@ class PeerConnection:
                     if 'stopped' in self.my_state:
                         break
 
-                    if type(message) is Bitfield:
+                    if type(message) is BitField:
                         self.piece_manager.add_peer(self.remote_id, message.bitfield)
                     elif type(message) is Interested:
                         self.peer_state.append('interested')
@@ -139,7 +138,7 @@ class PeerConnection:
 
     async def _send_interested(self):
         interested = Interested()
-        print("Sending message {interested} to peer {self.remote_id}")
+        print(f"Sending message {interested} to peer {self.remote_id}")
         self.writer.write(interested.encode())
         await self.writer.drain()
 class PeerStreamIterator:
@@ -189,7 +188,7 @@ class PeerStreamIterator:
         if message_length == 0:
             return KeepAlive()
         
-        if len(self.buffer) > message_length:
+        if len(self.buffer) >= header_length + message_length:
             message_id = self.buffer[header_length]
             
             def _consume():
