@@ -1489,3 +1489,5 @@ When a peer leaves, we now need to get rid of the endgame requests that were mad
 
 Once we recieve the block we need to get rid of redundant requests too, right now i wont do that we can do that later
 
+### UDP Trackers!!
+turns out there are udp trackers as well, which are not supported by the current implementation.
