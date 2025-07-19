@@ -272,6 +272,76 @@ class Request(PeerMessage):
 
     def __str__(self):
         return 'Request'
+    
+class Piece(PeerMessage):
+    """ 
+    Though this class is named as piece, it actually represents blocks.
+    However, the actual bitTorrent specification calls both block and piece as piece
+
+    This request is used to send a block of a piece to a peer.
+    The message format is:
+    <len=0009+block length><id=7><piece index><block offset><block data>
+    
+    """
+    def __init__(self, piece_index: int, block_offset: int, block_data: bytes):
+        self.piece_index = piece_index
+        self.block_offset = block_offset
+        self.block_data = block_data
+
+    def encode(self) -> bytes:
+        length = 9 + len(self.block_data)
+        return (struct.pack('!I B I I', length, PeerMessage.Piece, 
+                           self.piece_index, self.block_offset) + self.block_data)
+
+    @classmethod
+    def decode(cls, data: bytes):
+        length = struct.unpack('!I', data[:4])[0]
+        if len(data) < length + 4:
+            raise ValueError("Invalid Piece message length")
+        
+        message_id = data[4]
+        if message_id != PeerMessage.Piece:
+            raise ValueError("Invalid Piece message id")
+
+        piece_index, block_offset = struct.unpack('!I I', data[5:13])
+        block_data = data[13:4+length]
+        return cls(piece_index, block_offset, block_data)
+
+    def __str__(self):
+        return 'Piece'
+    
+class Cancel(PeerMessage):
+    """
+    This message is used to cancel a previously sent request for a block of a piece.
+    The message format is:
+    <len=0013><id=8><piece index><block offset><block length>
+
+    Almost identical to Request message, but with different message id.
+    """
+    def __init__(self, piece_index: int, block_offset: int, block_length: int = REQUEST_SIZE):
+        self.piece_index = piece_index
+        self.block_offset = block_offset
+        self.block_length = block_length
+
+    def encode(self) -> bytes:
+        return struct.pack('!I B I I I', 13, PeerMessage.Cancel, 
+                          self.piece_index, self.block_offset, self.block_length)
+
+    @classmethod
+    def decode(cls, data: bytes):
+        length = struct.unpack('!I', data[:4])[0]
+        if len(data) < length + 4:
+            raise ValueError("Invalid Cancel message length")
+        
+        message_id = data[4]
+        if message_id != PeerMessage.Cancel:
+            raise ValueError("Invalid Cancel message id")
+
+        piece_index, block_offset, block_length = struct.unpack('!I I I', data[5:17])
+        return cls(piece_index, block_offset, block_length)
+
+    def __str__(self):
+        return 'Cancel'
 
 class PeerConnection:
     def __init__(self, queue: Queue, info_hash, peer_id, piece_manager, call_back_on_recieve=None):
@@ -510,58 +580,3 @@ class PeerStreamIterator:
                 raise ProtocolError(f"Unknown message id: {message_id}")
         
         return None
-
-    
-class Piece(PeerMessage):
-    def __init__(self, piece_index: int, block_offset: int, block_data: bytes):
-        self.piece_index = piece_index
-        self.block_offset = block_offset
-        self.block_data = block_data
-
-    def encode(self) -> bytes:
-        length = 9 + len(self.block_data)
-        return (struct.pack('!I B I I', length, PeerMessage.Piece, 
-                           self.piece_index, self.block_offset) + self.block_data)
-
-    @classmethod
-    def decode(cls, data: bytes):
-        length = struct.unpack('!I', data[:4])[0]
-        if len(data) < length + 4:
-            raise ValueError("Invalid Piece message length")
-        
-        message_id = data[4]
-        if message_id != PeerMessage.Piece:
-            raise ValueError("Invalid Piece message id")
-
-        piece_index, block_offset = struct.unpack('!I I', data[5:13])
-        block_data = data[13:4+length]
-        return cls(piece_index, block_offset, block_data)
-
-    def __str__(self):
-        return 'Piece'
-    
-class Cancel(PeerMessage):
-    def __init__(self, piece_index: int, block_offset: int, block_length: int = REQUEST_SIZE):
-        self.piece_index = piece_index
-        self.block_offset = block_offset
-        self.block_length = block_length
-
-    def encode(self) -> bytes:
-        return struct.pack('!I B I I I', 13, PeerMessage.Cancel, 
-                          self.piece_index, self.block_offset, self.block_length)
-
-    @classmethod
-    def decode(cls, data: bytes):
-        length = struct.unpack('!I', data[:4])[0]
-        if len(data) < length + 4:
-            raise ValueError("Invalid Cancel message length")
-        
-        message_id = data[4]
-        if message_id != PeerMessage.Cancel:
-            raise ValueError("Invalid Cancel message id")
-
-        piece_index, block_offset, block_length = struct.unpack('!I I I', data[5:17])
-        return cls(piece_index, block_offset, block_length)
-
-    def __str__(self):
-        return 'Cancel'
