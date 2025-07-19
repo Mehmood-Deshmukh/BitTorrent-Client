@@ -34,6 +34,8 @@ class TorrentClient:
         """
         await self.tracker.start()
         
+        # These are the peer connections that will be established with the available peers
+        # essentially, these are the workers that run.
         self.peers = [
             PeerConnection(
                 self.available_peers,

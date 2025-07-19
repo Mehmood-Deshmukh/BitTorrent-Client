@@ -11,6 +11,268 @@ REQUEST_SIZE = 2**14
 class ProtocolError(Exception):  
     pass
 
+class PeerMessage:
+    """
+    This represents a message between two peers in the BitTorrent protocol.
+
+    All of the messages except handshake the the form:
+    <length prefix><message id><payload>
+
+    - length prefix: 4 bytes, unsigned integer, the length of the payload
+    - message id: 1 byte, the id of the message
+    - payload: variable length, the data of the message
+
+    The bitTorrent protocol defines the following message Ids:
+    - Choke: 0
+    - Unchoke: 1  
+    - Interested: 2
+    - NotInterested: 3
+    - Have: 4
+    - BitField: 5
+    - Request: 6
+    - Piece: 7
+    - Cancel: 8
+    - Port: 9
+
+    The KeepAlive message is a special case, it has no payload and is represented by a 0-length message.
+
+    reference: https://wiki.theory.org/BitTorrentSpecification#Messages
+
+    The encode and decode methods are used to convert the message to and from bytes.
+
+    BitTorrent uses big-endian byte order for all integers.
+    So we use '>' or '!' in struct.pack and struct.unpack to specify big-endian byte order.
+
+    """
+    Choke = 0
+    Unchoke = 1
+    Interested = 2
+    NotInterested = 3
+    Have = 4
+    BitField = 5
+    Request = 6
+    Piece = 7
+    Cancel = 8
+    Port = 9
+
+    HandShake = None
+    keepAlive = None
+
+    def encode(self) -> bytes:
+        """
+        Encodes the message to bytes.
+        """
+        pass
+
+    @classmethod
+    def decode(cls, data: bytes):
+        """
+        decodes the message from bytes into instance of the implementing class.
+        """
+        pass
+
+class Handshake(PeerMessage):
+    """
+    This first step in establishing a connection with a peer is the handshake.
+    The handshake message is always 68 bytes long and consists of the following fields:
+    - pstrlen: 1 byte, the length of the pstr field (pstr - protocol string)
+    - pstr: 19 bytes, the string 'BitTorrent protocol'
+    - reserved : 8 bytes, reserved for future use, currently all zeros
+    - info_hash: 20 bytes, the SHA1 hash of the torrent's info dictionary
+    - peer_id: 20 bytes, the unique identifier of the peer, usually a randomly generated string of 20 bytes.
+
+
+
+    """
+    length = 68
+
+    def __init__(self, info_hash: bytes, peer_id: bytes):
+        self.pstrlen = 19
+        self.pstr = b'BitTorrent protocol'
+        self.reserved = b'\x00' * 8
+        self.info_hash = info_hash
+        self.peer_id = peer_id
+
+    def encode(self) -> bytes:
+        """
+        ! - tells struct to use big-endian byte order
+        B - unsigned char (1 byte)
+        s - string (variable length, must be specified with length)
+        8s - 8 bytes string (reserved)
+        20s - 20 bytes string (info_hash and peer_id)
+        20s - 20 bytes string (peer_id)
+        """
+        return struct.pack(
+            f'!B{self.pstrlen}s8s20s20s',
+            self.pstrlen,
+            self.pstr,
+            self.reserved,
+            self.info_hash,
+            self.peer_id
+        )
+    
+    @classmethod
+    def decode(cls, data: bytes):
+        """
+        Decodes the handshake message from bytes.
+        Returns an instance of Handshake if the data is valid, otherwise returns None.
+        The data must be at least 68 bytes long.
+        """
+        if len(data) < 68:
+            return None
+        
+        pstrlen = data[0]
+        if pstrlen != 19 or len(data) < 49 + pstrlen:
+            return None
+            
+        pstr = data[1:1+pstrlen]
+        if pstr != b'BitTorrent protocol':
+            return None
+            
+        reserved = data[1+pstrlen:9+pstrlen]
+        info_hash = data[9+pstrlen:29+pstrlen]
+        peer_id = data[29+pstrlen:49+pstrlen]
+
+        return cls(info_hash, peer_id)
+
+class KeepAlive(PeerMessage):
+    """
+    The keep alive message has no payload and is represented by a 0-length message.
+    
+    Message format:
+    <len=0000>
+    """
+    def __str__(self):
+        return 'KeepAlive'
+    
+class BitField(PeerMessage):
+    """
+    The BitField is a variable length message where the payload is a bit array
+    representing all the bits a peer have by 1 and rest by 0
+    """
+    def __init__(self, data):
+        self.bitfield = bitstring.BitArray(bytes=data)
+    
+    def encode(self) -> bytes:
+        payload = self.bitfield.bytes
+        length = len(payload) + 1  
+        return struct.pack(f'!I B', length, PeerMessage.BitField) + payload
+    
+    @classmethod
+    def decode(cls, data: bytes):
+        length = struct.unpack('!I', data[:4])[0]    
+        if len(data) < length + 4:
+            raise ValueError("Invalid BitField message length")
+        
+        message_id = data[4]
+        if message_id != PeerMessage.BitField:
+            raise ValueError("Invalid BitField message id")
+
+        bitfield_data = data[5:4+length]
+        return cls(bitfield_data)
+
+class Interested(PeerMessage):
+    """
+    The interested message is a fixed length message with no payload.
+    It is used to let a peer know that we are interested in downloading pieces from them.
+    """
+    def encode(self) -> bytes:
+        return struct.pack('!I B', 1, PeerMessage.Interested)
+
+    def __str__(self):
+        return 'Interested'
+
+class NotInterested(PeerMessage):
+    """
+    The not interested message is a fixed length message with no payload.
+    It is used to let a peer know that we are not interested in downloading pieces from them
+    """
+    def encode(self) -> bytes:
+        return struct.pack('!I B', 1, PeerMessage.NotInterested)
+
+    def __str__(self):
+        return 'NotInterested'
+
+class Choke(PeerMessage):
+    """
+    The choke message is a fixed length message with no payload.
+    It is used to let a peer know not to request pieces until they are unchoked
+    """
+    def __str__(self):
+        return 'Choke'
+
+class Unchoke(PeerMessage):
+    """
+    Unchoking a peer allows them to start requesting pieces.
+    """
+    def __str__(self):
+        return 'Unchoke'
+
+class Have(PeerMessage):
+    """
+    The have message is used to inform a peer that we have a new piece.
+    It contains the index of the piece we have.
+
+    It is used by the piece manager on the reciving end to update the state of the peer.
+    The message format is:
+    <len=0009><id=4><piece index>
+    the index is 0 based
+    """
+    def __init__(self, piece_index: int):
+        self.piece_index = piece_index
+
+    def encode(self) -> bytes:
+        return struct.pack('!I B I', 5, PeerMessage.Have, self.piece_index)
+
+    @classmethod
+    def decode(cls, data: bytes):
+        length = struct.unpack('!I', data[:4])[0]
+        if len(data) < length + 4:
+            raise ValueError("Invalid Have message length")
+        
+        message_id = data[4]
+        if message_id != PeerMessage.Have:
+            raise ValueError("Invalid Have message id")
+
+        piece_index = struct.unpack('!I', data[5:9])[0]
+        return cls(piece_index)
+
+    def __str__(self):
+        return 'Have'
+
+class Request(PeerMessage):
+    """
+    The request message is used to request a block of a piece from a peer.
+
+    The request size for each block is 16KB (2^14 bytes) by default.
+    The message format is:
+    <len=0013><id=6><piece index><block offset><block length>
+    """
+    def __init__(self, piece_index: int, block_offset: int, block_length: int = REQUEST_SIZE):
+        self.piece_index = piece_index # index of the piece we are requesting
+        self.block_offset = block_offset # the 0-based offset withing the piece
+        self.block_length = block_length # requested length of the block, default is 16KB
+
+    def encode(self) -> bytes:
+        return struct.pack('!I B I I I', 13, PeerMessage.Request, 
+                          self.piece_index, self.block_offset, self.block_length)
+
+    @classmethod
+    def decode(cls, data: bytes):
+        length = struct.unpack('!I', data[:4])[0]
+        if len(data) < length + 4:
+            raise ValueError("Invalid Request message length")
+        
+        message_id = data[4]
+        if message_id != PeerMessage.Request:
+            raise ValueError("Invalid Request message id")
+
+        piece_index, block_offset, block_length = struct.unpack('!I I I', data[5:17])
+        return cls(piece_index, block_offset, block_length)
+
+    def __str__(self):
+        return 'Request'
+
 class PeerConnection:
     def __init__(self, queue: Queue, info_hash, peer_id, piece_manager, call_back_on_recieve=None):
         self.queue = queue
@@ -249,163 +511,6 @@ class PeerStreamIterator:
         
         return None
 
-class PeerMessage:
-    Choke = 0
-    Unchoke = 1
-    Interested = 2
-    NotInterested = 3
-    Have = 4
-    BitField = 5
-    Request = 6
-    Piece = 7
-    Cancel = 8
-    Port = 9
-
-    HandShake = None
-    keepAlive = None
-
-    def encode(self) -> bytes:
-        pass
-
-    @classmethod
-    def decode(cls, data: bytes):
-        pass
-
-class Handshake(PeerMessage):
-    length = 68
-
-    def __init__(self, info_hash: bytes, peer_id: bytes):
-        self.pstrlen = 19
-        self.pstr = b'BitTorrent protocol'
-        self.reserved = b'\x00' * 8
-        self.info_hash = info_hash
-        self.peer_id = peer_id
-
-    def encode(self) -> bytes:
-        return struct.pack(
-            f'!B{self.pstrlen}s8s20s20s',
-            self.pstrlen,
-            self.pstr,
-            self.reserved,
-            self.info_hash,
-            self.peer_id
-        )
-    
-    @classmethod
-    def decode(cls, data: bytes):
-        if len(data) < 68:
-            return None
-        
-        pstrlen = data[0]
-        if pstrlen != 19 or len(data) < 49 + pstrlen:
-            return None
-            
-        pstr = data[1:1+pstrlen]
-        if pstr != b'BitTorrent protocol':
-            return None
-            
-        reserved = data[1+pstrlen:9+pstrlen]
-        info_hash = data[9+pstrlen:29+pstrlen]
-        peer_id = data[29+pstrlen:49+pstrlen]
-
-        return cls(info_hash, peer_id)
-
-class KeepAlive(PeerMessage):
-    def __str__(self):
-        return 'KeepAlive'
-    
-class BitField(PeerMessage):
-    def __init__(self, data):
-        self.bitfield = bitstring.BitArray(bytes=data)
-    
-    def encode(self) -> bytes:
-        payload = self.bitfield.bytes
-        length = len(payload) + 1  
-        return struct.pack(f'!I B', length, PeerMessage.BitField) + payload
-    
-    @classmethod
-    def decode(cls, data: bytes):
-        length = struct.unpack('!I', data[:4])[0]    
-        if len(data) < length + 4:
-            raise ValueError("Invalid BitField message length")
-        
-        message_id = data[4]
-        if message_id != PeerMessage.BitField:
-            raise ValueError("Invalid BitField message id")
-
-        bitfield_data = data[5:4+length]
-        return cls(bitfield_data)
-
-class Interested(PeerMessage):
-    def encode(self) -> bytes:
-        return struct.pack('!I B', 1, PeerMessage.Interested)
-
-    def __str__(self):
-        return 'Interested'
-
-class NotInterested(PeerMessage):
-    def encode(self) -> bytes:
-        return struct.pack('!I B', 1, PeerMessage.NotInterested)
-
-    def __str__(self):
-        return 'NotInterested'
-
-class Choke(PeerMessage):
-    def __str__(self):
-        return 'Choke'
-
-class Unchoke(PeerMessage):
-    def __str__(self):
-        return 'Unchoke'
-
-class Have(PeerMessage):
-    def __init__(self, piece_index: int):
-        self.piece_index = piece_index
-
-    def encode(self) -> bytes:
-        return struct.pack('!I B I', 5, PeerMessage.Have, self.piece_index)
-
-    @classmethod
-    def decode(cls, data: bytes):
-        length = struct.unpack('!I', data[:4])[0]
-        if len(data) < length + 4:
-            raise ValueError("Invalid Have message length")
-        
-        message_id = data[4]
-        if message_id != PeerMessage.Have:
-            raise ValueError("Invalid Have message id")
-
-        piece_index = struct.unpack('!I', data[5:9])[0]
-        return cls(piece_index)
-
-    def __str__(self):
-        return 'Have'
-
-class Request(PeerMessage):
-    def __init__(self, piece_index: int, block_offset: int, block_length: int = REQUEST_SIZE):
-        self.piece_index = piece_index
-        self.block_offset = block_offset
-        self.block_length = block_length
-
-    def encode(self) -> bytes:
-        return struct.pack('!I B I I I', 13, PeerMessage.Request, 
-                          self.piece_index, self.block_offset, self.block_length)
-
-    @classmethod
-    def decode(cls, data: bytes):
-        length = struct.unpack('!I', data[:4])[0]
-        if len(data) < length + 4:
-            raise ValueError("Invalid Request message length")
-        
-        message_id = data[4]
-        if message_id != PeerMessage.Request:
-            raise ValueError("Invalid Request message id")
-
-        piece_index, block_offset, block_length = struct.unpack('!I I I', data[5:17])
-        return cls(piece_index, block_offset, block_length)
-
-    def __str__(self):
-        return 'Request'
     
 class Piece(PeerMessage):
     def __init__(self, piece_index: int, block_offset: int, block_data: bytes):
