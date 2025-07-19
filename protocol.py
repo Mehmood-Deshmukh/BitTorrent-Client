@@ -344,18 +344,34 @@ class Cancel(PeerMessage):
         return 'Cancel'
 
 class PeerConnection:
+    """ 
+    A peer connection is used to download pieces from a peer.
+
+    The peer connection will consume one peer from the queue and try to establish a connection with it.
+    To do that it will perform a handshake with the peer.
+
+    after a successfull handshake, the peer connection will be in an "choked" state.
+    It will then send an "interested" message to the peer, which will allow the
+    peer to start sending pieces to us.
+
+    Once the peer unchokes us, we will start requesting pieces from the peer.
+    The peer connection will  continue requesting pieces as long as there are pieces left to
+    request or the peer disconnects
+
+    If the peer disconnects, the peer connection will consume another peer from the queue
+    """    
     def __init__(self, queue: Queue, info_hash, peer_id, piece_manager, call_back_on_recieve=None):
-        self.queue = queue
-        self.info_hash = info_hash
-        self.peer_id = peer_id
-        self.piece_manager = piece_manager
-        self.call_back_on_recieve = call_back_on_recieve
-        self.my_state = []
-        self.peer_state = []
-        self.remote_id = None
-        self.reader = None
-        self.writer = None
-        self.future = asyncio.create_task(self._start())
+        self.queue = queue # Queue of peers to connect to
+        self.info_hash = info_hash # the SHA1 hash of the torrent's info dictionary
+        self.peer_id = peer_id # the unique identifier of the peer, usually a randomly generated string of 20 bytes
+        self.piece_manager = piece_manager # PieceManager instance to manage pieces and requests
+        self.call_back_on_recieve = call_back_on_recieve # the callback function to call on when a block is received
+        self.my_state = [] # the states of the peer connection
+        self.peer_state = [] # the states of the peer
+        self.remote_id = None # the unique identifier of the remote peer, set after handshake
+        self.reader = None # stream to read data from the peer
+        self.writer = None # stream to write data to the peer
+        self.future = asyncio.create_task(self._start()) # start running the task
 
     async def _start(self):
         while 'stopped' not in self.my_state:
@@ -365,35 +381,52 @@ class PeerConnection:
 
                 self.reader, self.writer = await asyncio.wait_for(
                     asyncio.open_connection(ip, port), timeout=10.0)
+                
                 logging.debug(f"Connected to peer {ip}:{port}")
 
-                buffer = await self._handshake()
+                buffer = await self._handshake() # perform the handshake with the peer
 
-                self.my_state.append('choked')
+                self.my_state.append('choked') # initially we are choked, we will send interested message after handshake
                 await self._send_interested()
                 self.my_state.append('interested')
 
+
+
+                # Now we will start reading messages from the peer
                 async for message in PeerStreamIterator(self.reader, buffer):
                     if 'stopped' in self.my_state:
                         break
-
+                    
+                    # if we receive a BitField message, we will add the peer to the piece manager
                     if type(message) is BitField:
                         self.piece_manager.add_peer(self.remote_id, message.bitfield)
+                    
+                    #if we receive a interested or not interested message, we will update the peer state
+                    # it is not useful for us right now as we don't support seeding
                     elif type(message) is Interested:
                         self.peer_state.append('interested')
                     elif type(message) is NotInterested:
                         if 'interested' in self.peer_state:
                             self.peer_state.remove('interested')
+
+                    # if we receive a choke or unchoke message, we will update our state
+                    # as soon as we are unchoked, we will request the next block
                     elif type(message) is Choke:
                         self.my_state.append('choked')
                     elif type(message) is Unchoke:
                         if 'choked' in self.my_state:
                             self.my_state.remove('choked')
                         await self._request_next_block()
+
+                    #if we recieve a have message, we will update the piece info
                     elif type(message) is Have:
                         self.piece_manager.update_peer(self.remote_id, message.piece_index)
+                    # keep alive messages are used to keep the connection alive
                     elif type(message) is KeepAlive:
                         pass
+                
+                    # if we receive a piece message, we will call the callback function
+                    # and request the next block 
                     elif type(message) is Piece:
                         if 'pending_request' in self.my_state:
                             self.my_state.remove('pending_request')
@@ -412,6 +445,8 @@ class PeerConnection:
                         # right now we don't support seeding
                         pass
                     
+                    # send a request for the next block if we are not choked
+                    # and we are interested in the peer and we don't have a pending request
                     if ('choked' not in self.my_state and 
                         'interested' in self.my_state and 
                         'pending_request' not in self.my_state):
@@ -430,34 +465,55 @@ class PeerConnection:
                 self.cancel()
 
     def cancel(self):
+        """
+        sends a cancel message to the peer and closes the connection.
+        """
         if self.remote_id:
             logging.debug(f"Closing connection with peer {self.remote_id}")
+
         if self.writer and not self.writer.is_closing():
             self.writer.close()
+        
+        # 
         if not self.queue.empty():
             try:
-                self.queue.task_done()
+                self.queue.task_done() # tell the queue "I'm done with this peer"
             except ValueError:
                 pass  
 
     async def stop(self):
+        """
+        Stops the connection and makes sure that it doesn't connect to any more peers.
+        """
         self.my_state.append('stopped')
         if not self.future.done():
             self.future.cancel()
     
     async def _request_next_block(self):
+        """
+        Requests the next block from the peer
+        """
         if self.remote_id:
+            # get the next block to request from the piece manager
             block = self.piece_manager.next_request(self.remote_id)
             if block:
+                # create a request message for the block
+                # and send it to the peer
                 request = Request(block.piece_index, block.block_offset, block.block_length)
                 logging.debug(f"Requesting block {block.block_offset} of piece {block.piece_index} from peer {self.remote_id}")
                 self.writer.write(request.encode())
                 await self.writer.drain()
 
     async def _handshake(self) -> bytes:
-        handshake = Handshake(self.info_hash, self.peer_id)
-        self.writer.write(handshake.encode())
-        await self.writer.drain()
+        """
+        Send the handshake message to the peer and wait for the response.
+        """
+        handshake = Handshake(self.info_hash, self.peer_id) # create the handshake message
+        self.writer.write(handshake.encode()) # send the handshake message to the peer
+        await self.writer.drain() # make sure the message is sent
+        
+
+        # now we will try to read the response from the peer until we have enough data
 
         buf = b''
         tries = 1
@@ -469,21 +525,30 @@ class PeerConnection:
                 break
             buf += data
 
+        # if the data is not sufficient for a handshake, raise an error
         if len(buf) < Handshake.length:
             raise ProtocolError("Insufficient data for handshake")
 
+        # decode the handshake response
         response = Handshake.decode(buf[:Handshake.length])
         if not response:
             raise ProtocolError("Invalid handshake response from peer")
+        
+        # check if the info hash matches
         if response.info_hash != self.info_hash:
             raise ProtocolError("Info hash mismatch in handshake response")
 
         self.remote_id = response.peer_id
         logging.info(f"Handshake with peer {self.remote_id} successful")
-
+        
+        # it may be possible that we read more data than just the handshake,
+        # so we return the remaining data in the buffer
         return buf[Handshake.length:]
 
     async def _send_interested(self):
+        """
+        Sending an interested message to the peer.
+        """
         interested = Interested()
         logging.debug(f"Sending message {interested} to peer {self.remote_id}")
         self.writer.write(interested.encode())
