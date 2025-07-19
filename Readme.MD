@@ -32,7 +32,7 @@ Not to be confused with the file format ".torrent" which is a metadata file that
 
 The first step in using BitTorrent is to obtain a ".torrent" file. This file contains metadata about the files you want to download, including their names, sizes, and the tracker URL. The tracker is a server that helps peers find each other.
 
-So when you want to download a file, you first requet the tracker to send you a list of peers that have the file. The tracker will respond with a list of IP addresses and ports of peers that have the file.
+So when you want to download a file, you first request the tracker to send you a list of peers that have the file. The tracker will respond with a list of IP addresses and ports of peers that have the file.
 
 ### Step 2 - Connecting to Peers
 
