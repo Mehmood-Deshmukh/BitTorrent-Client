@@ -555,22 +555,30 @@ class PeerConnection:
         await self.writer.drain()
 
 class PeerStreamIterator:
-    CHUNK_SIZE = 10 * 1024
+    """
+    The PeerStreamIterator is an asynchronous iterator that reads messages from a peer's stream
+    and tries to parse them into valid PeerMessage instances.
+    """
+    CHUNK_SIZE = 10 * 1024 # the size of the chunks to read from the stream at a time, 10KB
 
     def __init__(self, reader, initial: bytes=None):
         self.reader = reader
-        self.buffer = initial if initial else b''
+        # in case we read some extra data during the handshake, we will store it in the buffer
+        self.buffer = initial if initial else b'' 
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        # read data from the stream until we have enough data to parse a message
+        # return the parsed message and keep reading more data
         while True:
             try:
                 data = await self.reader.read(PeerStreamIterator.CHUNK_SIZE)
                 if data:
                     self.buffer += data
                     message = self._parse_message()
+                    #if we parsed a message, return it
                     if message:
                         return message
                 else:
@@ -590,23 +598,40 @@ class PeerStreamIterator:
                 raise StopAsyncIteration()
 
     def _parse_message(self):
+        """
+        Returns the paresed message if enough data is read from the buffer.
+        if not enough data is read, returns None.
+        """
         header_length = 4
 
+        # if the buffer is less than the header length, we can't parse a message
+        # so we return None and wait for more data to be read
         if len(self.buffer) < header_length:
             return None
 
         message_length = struct.unpack('!I', self.buffer[:header_length])[0]
+
+        # if the message length is 0, it is a keep alive message
+        # we remove the header and return a KeepAlive instance
         if message_length == 0:
             self.buffer = self.buffer[header_length:] 
             return KeepAlive()
         
+        # if the buffer is greater than or equal to the header length + message length, we can parse a message
         if len(self.buffer) >= header_length + message_length:
+            # get the message id from the buffer
             message_id = self.buffer[header_length]
             
             def _consume():
+                """
+                consumes the message from the buffer
+                """
                 self.buffer = self.buffer[header_length + message_length:]
             
             def _data():
+                """
+                extract message from read buffer
+                """
                 return self.buffer[:header_length + message_length]
 
             if message_id == PeerMessage.BitField:
