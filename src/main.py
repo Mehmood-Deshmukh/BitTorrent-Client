@@ -6,7 +6,7 @@ import logging
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    torrent_file = "./files/LibreOffice_25.2.4_Linux_x86-64_rpm.tar.gz.torrent"
+    torrent_file = "../files/LibreOffice_25.2.4_Linux_x86-64_rpm.tar.gz.torrent"
     client = TorrentClient(Torrent(torrent_file))
     
     try:
